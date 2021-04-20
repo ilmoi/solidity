@@ -38,6 +38,7 @@
     + [Pure Functions](#pure-functions)
     + [Payable Functions](#payable-functions)
     + [Fallback Function](#fallback-function)
+    + [Virtual/override](#virtual-override)
   * [Contracts](#contracts)
     + [Creating contracts using `new`](#creating-contracts-using--new-)
     + [Contract Inheritance](#contract-inheritance)
@@ -70,7 +71,7 @@
 gas amount
 - execution cost (in gas) = simply the sum of gas costs of each of the OPCODEs, as defined in [ethereum yellowpaper](https://www.luno.com/blog/en/post/understanding-ethereum-fees-how-gas-works)
 - transaction cost = execution cost + pay for tx itself, SC creation, and the size of data field
-- loops use a lot of gas so you should avoid using them as much as possible
+- loops use a lot of gas, so you should avoid using them as much as possible
 
 ## Units
 
@@ -171,17 +172,23 @@ Methods:
 
 #### transfer and send
 
-- `<address>.transfer(uint256 amount)`: send given amount of Wei to Address, throws on failure
-- `<address>.send(uint256 amount) returns (bool)`: send given amount of Wei to Address, returns false on failure
+- `<address>.transfer(uint256 amount)`: send given amount of Wei to Address, **throws** on failure
+- `<address>.send(uint256 amount) returns (bool)`: send given amount of Wei to Address, **returns false** on failure
 
 #### call
 - `<address>.call(...) returns (bool)`: issue low-level CALL, returns false on failure
+- can be used to:
+  1. Call existing fn
+  2. Call non-existing fn and thus trigger fallback
+- syntax: `(bool success, bytes memory data) = addr.call.value(msg.value).gas(12345)(abi.encodeWithSignature("foo(string, uin256)"))` [explainer](https://www.youtube.com/watch?v=mz10sUmEdsM)
+- NOTE: it is NOT the recommended way to call fns in other contracts, since it's easy to mess up the signature
 
 #### delegatecall
-
 - `<address>.delegatecall(...) returns (bool)`: issue low-level DELEGATECALL, returns false on failure
-
-Delegatecall uses the code of the target address, taking all other aspects (storage, balance, ...) from the calling contract. The purpose of delegatecall is to use library code which is stored in another contract. The user has to ensure that the layout of storage in both contracts is suitable for delegatecall to be used.
+- when contract A calls contract B using delegatecall, it's basically running B's code inside of its own (A's) context (msg.sender, msg.value, etc)
+- 2 things to remember when using delegatecall to prevent attack:
+  - it preserves context [eg](https://www.youtube.com/watch?v=bqn-HzRclps)
+  - in order for delegate call to work, storage layout must be the same for both A and B (ie both must declare same variables in same order) [eg](https://www.youtube.com/watch?v=oinniLm5gAM&list=PLO5VPQH6OWdWsCgXJT9UuzgbC8SPvTRi5&index=15)
 
 ```solidity
 contract A {
@@ -219,8 +226,8 @@ Arrays can be dynamic or have a fixed size.
 
 ```solidity
 uint[] dynamicSizeArray;
-uint[7] fixedSizeArray;
-uint[][5] //5 dynamically sized arrays (reversed notation)
+uint[7] fixedSizeArray up to 32;
+uint[][5] //5 dynamically sized arrays (reversed notation, be careful)
 ```
 
 ### Fixed byte arrays
@@ -229,9 +236,9 @@ uint[][5] //5 dynamically sized arrays (reversed notation)
 
 Operators:
 
-Comparisons: `<=`, `<`, `==`, `!=`, `>=`, `>` (evaluate to bool)
-Bit operators: `&`, `|`, `^` (bitwise exclusive or), `~` (bitwise negation), `<<` (left shift), `>>` (right shift)
-Index access: If x is of type bytesI, then x[k] for 0 <= k < I returns the k th byte (read-only).
+- Comparisons: `<=`, `<`, `==`, `!=`, `>=`, `>` (evaluate to bool)
+- Bit operators: `&`, `|`, `^` (bitwise exclusive or), `~` (bitwise negation), `<<` (left shift), `>>` (right shift)
+- Index access: If x is of type bytesI, then `x[k]` for 0 <= k < I returns the k th byte (read-only).
 
 Members
 
@@ -316,14 +323,14 @@ Can be read-only (`call`) or read-write (`transaction`).
 
 ### Structure
 
-`function (<parameter types>) {internal|external|public|private} [pure|constant|view|payable] [returns (<return types>)]`
+`function (<parameter types>) {internal|external|public|private} [pure|constant|view|payable] [virtual|override] [returns (<return types>)]`
 
 ### Access modifiers
 
 - ```public``` - Accessible from this contract, inherited contracts and externally
 - ```private``` - Accessible only from this contract
 - ```internal``` - Accessible only from this contract and contracts inheriting from it
-- ```external``` - Cannot be accessed internally, only externally. Recommended to reduce gas. Access internally with `this.f`.
+- ```external``` - Cannot be accessed internally, only externally. MORE EXPENSIVE THAN INTERNAL TO CALL FROM WITHIN THE CTR. Access internally with `this.f`.
 
 ### Parameters
 
@@ -520,6 +527,31 @@ fallback() external payable {
 }
 ```
 
+### Virtual Override
+`virtual` = function in parent we want to override
+- if absent, then the function CANT be overriden
+- `private` fns can't be `virtual`
+- fns w/o implementation have to be marked `virtual` outside of interfaces
+- in interfaces all fns automatically considered `virtual`
+
+`override` = function that does the overriding
+- for multiple inheritance, if fn present in each parent, we MUST override at child level
+
+```solidity
+contract Base1 {
+    function foo() virtual public {}
+}
+
+contract Base2 {
+    function foo() virtual public {}
+}
+
+contract Inherited is Base1, Base2 {
+    // Derives from multiple bases defining foo(), so we must explicitly override it
+    function foo() public override(Base1, Base2) {}
+}
+```
+
 ## Contracts
 
 ### Creating contracts using `new`
@@ -536,7 +568,7 @@ contract A {
 contract C {
     address a;
     function f(uint _a) {
-        a = new A();
+        a = new A(); //since we're spawning a new contract, use an interface where possible (cheaper)
     }
 }
 ```
@@ -591,12 +623,14 @@ contract B is A(1) {
 
 ### Abstract Contracts
 
-Contracts that contain implemented and non-implemented functions. Such contracts cannot be compiled, but they can be used as base contracts.
+`abstract` contracts 
+- has only 1 req: that at least 1 fn that is defined is not implemented
+- they are typically used as base for inhereting
 
 ```solidity
 pragma solidity ^0.4.0;
 
-contract A {
+abstract contract A {
     function C() returns (bytes32);
 }
 
@@ -607,14 +641,17 @@ contract B is A {
 
 ## Interface
 
-`Interfaces` are similar to abstract contracts, but they have restrictions:
+`Interfaces` are similar to abstract contracts, but have more restrictions:
 
-- Cannot have any functions implemented.
-- Cannot inherit other contracts or interfaces.
+- Cannot have any functions implemented, only show their declarations.
+- Cannot inherit other contracts / but can inherit from other interfaces.
 - Cannot define constructor.
 - Cannot define variables.
 - Cannot define structs.
 - Cannot define enums.
+
+In terms of abstractions, from most specific to least: contract > abstract contract > interfeace
+
 
 ```solidity
 pragma solidity ^0.4.11;
@@ -654,47 +691,68 @@ contract ClientReceipt {
 
 ## Library
 
-Libraries are similar to contracts, but they are deployed only once at a specific address, and their code is used with [`delegatecall`](#delegatecall) (`callcode`). 
-- you write them exactly the same as you write a `contract` - you cna have variables, functions, but you start them with a keyword  `library`
-- libraries are never executed on their own, but rather as part of another calling contract
-  - think of them as code that's copied inside your SC and executed there
-- librarires
-  - can't inherit or be inherited
-  - can't receive ether
+Libraries:
+- are similar to contracts (can have variables, functions), but start with keyword `library`
+- are defined exactly once and can be re-used by multiple contracts
+- can't inherit or be inherited
+- can't receive ether
+- under the hood, their code is used with [`delegatecall`](#delegatecall) (`callcode`)
 
+There are [2 types of libraries](https://www.youtube.com/watch?v=25MLAnIzXRw):
+1. Deployed - standard one, where one lib can service multiple SC
+2. Embedded - where all fns inside the lib are `internal` and so its deployed at the same address as the SC
+
+Simple example:
 ```solidity
-library arithmatic {
-    function add(uint _a, uint _b) returns (uint) {
-        return _a + _b;
+// SPDX-License-Identifier: MIT
+library MyLib {
+    function add10(uint a) public pure returns(uint) {
+        return a+10;
     }
 }
 
-contract C {
-    uint sum;
-
-    function f() {
-        sum = arithmatic.add(2, 3);
+contract A {
+    function TenTen() public pure returns(uint) {
+        return MyLib.add10(10);
     }
 }
 ```
 
-## Using - For
-
-`using A for B;` can be used to attach library functions to any type.
-
+More sophisticated example, where we're using a type which itself is defined in the lib:
 ```solidity
-library arithmatic {
-    function add(uint _a, uint _b) returns (uint) {
-        return _a + _b;
+library MyLib {
+    //note how we define the struct inside the library
+    struct Player {
+        uint score;    
+    }
+    
+    function incrScore(Player storage _player, uint _points) public {
+        _player.score += _points;
     }
 }
 
-contract C {
-    using arithmatic for uint;
+contract A {
+    mapping(uint => MyLib.Player) public players;
     
-    uint sum;
-    function f(uint _a) {
-        sum = _a.add(3);
+    function incrFirstPlayerScore() public {
+        MyLib.incrScore(players[0], 10);
+    }
+}
+```
+
+
+## Using - For
+
+can be used to attach a library to any type, including one defined in the library itself. Eg extending the above example we can rewrite contract A as follows:
+
+```solidity
+contract A {
+    using MyLib for MyLib.Player; //add this line
+    
+    mapping(uint => MyLib.Player) public players;
+    
+    function incrFirstPlayerScore() public {
+        players[0].incrScore(10); //notice how this changed
     }
 }
 ```
